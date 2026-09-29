@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "executedTests": 5,
+  "checks": [
+    {
+      "project": "_Organized Desktop/05 Numbered Experiments/ww18",
+      "id": "b17f4c546008",
+      "command": [
+        "node",
+        "--experimental-vm-modules",
+        "--test",
+        "tests/quote-transition-policy.test.mjs"
+      ],
+      "cwd": "C:\\Users\\Owner\\Desktop\\AstraOrganized2\\astra-remaining-improvements\\stage\\b17f4c546008",
+      "environmentOverrides": {},
+      "startedAt": "2026-09-22T03:20:01.508267+00:00",
+      "status": "complete",
+      "log": "crud-b05-astra-runtime.log",
+      "pid": 26800,
+      "exitCode": 0,
+      "passed": true,
+      "finishedAt": "2026-09-22T03:20:06.032267+00:00",
+      "elapsedSeconds": 4.52
+    }
+  ],
+  "limits": [
+    "Five Node cases execute actual quote policy, money helpers and error classes without dependency doubles. No quote service, Next, Prisma, transaction, tenant authorization or order conversion execution.",
+    "Pure policy tests use valid typed-like fixtures; request-schema validation, invalid runtime enum values and concurrent approval/price changes are outside this lab. No production code changed."
+  ]
+}

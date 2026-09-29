@@ -1,0 +1,416 @@
+// What this file does:
+// Defines the durable domain model for the quote-to-cash platform, including tenant boundaries.
+// What calls it:
+// Prisma Client generation and every repository under src/repositories.
+// What it calls:
+// PostgreSQL through Prisma's query engine at runtime.
+// One thing a junior engineer would likely get wrong:
+// Omitting tenantId from child aggregates, which makes safe authorization impossible later.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PLATFORM_ADMIN
+  ORG_ADMIN
+  SALES
+  DEAL_DESK
+  FINANCE
+  LEGAL
+  OPS
+}
+
+enum OpportunityStage {
+  DISCOVERY
+  PROPOSAL
+  NEGOTIATION
+  COMMIT
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum QuoteStatus {
+  DRAFT
+  PENDING_DEAL_DESK
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CONVERTED_TO_ORDER
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ApprovalType {
+  DEAL_DESK
+  FINANCE
+  LEGAL
+}
+
+enum DealDeskCaseStatus {
+  OPEN
+  APPROVED_EXCEPTION
+  DENIED_EXCEPTION
+}
+
+enum OrderStatus {
+  DRAFT
+  ACTIVE
+  CANCELLED
+}
+
+enum ProvisioningStatus {
+  QUEUED
+  HANDED_OFF
+  FAILED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  VOID
+}
+
+enum PaymentMethod {
+  ACH
+  CARD
+  WIRE
+  CREDIT_MEMO
+}
+
+enum RevenueEventType {
+  PAYMENT_RECEIVED
+  PROVISIONING_COMPLETE
+  MANUAL_ADJUSTMENT
+}
+
+enum RevenueEventStatus {
+  PENDING
+  READY_FOR_RECOGNITION
+  RECOGNIZED
+}
+
+enum WorkflowJobType {
+  PROVISIONING_HANDOFF
+  REVENUE_RECOGNITION
+}
+
+enum WorkflowJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum AmendmentType {
+  UPSIZE
+  DOWNSIZE
+  EXTENSION
+  CANCELLATION
+}
+
+model Tenant {
+  id                   String                @id @default(cuid())
+  name                 String
+  createdAt            DateTime              @default(now())
+  users                User[]
+  customerAccounts     CustomerAccount[]
+  products             Product[]
+  priceRules           PriceRule[]
+  opportunities        Opportunity[]
+  quotes               Quote[]
+  dealDeskCases        DealDeskCase[]
+  salesOrders          SalesOrder[]
+  provisioningRequests ProvisioningRequest[]
+  invoices             Invoice[]
+  payments             Payment[]
+  revenueEvents        RevenueEvent[]
+  workflowJobs         WorkflowJob[]
+  auditLogs            AuditLog[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  email     String   @unique
+  name      String
+  role      UserRole
+  createdAt DateTime @default(now())
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+}
+
+model CustomerAccount {
+  id                String        @id @default(cuid())
+  tenantId          String
+  name              String
+  billingCountry    String
+  primaryContact    String
+  contractTemplate  String
+  createdAt         DateTime      @default(now())
+  tenant            Tenant        @relation(fields: [tenantId], references: [id])
+  opportunities     Opportunity[]
+  quotes            Quote[]
+  salesOrders       SalesOrder[]
+}
+
+model Product {
+  id                        String      @id @default(cuid())
+  tenantId                  String
+  sku                       String
+  name                      String
+  billingCadence            String
+  basePriceCents            Int
+  standardTermMonths        Int
+  autoApprovalDiscountPct   Int
+  dealDeskDiscountPct       Int
+  active                    Boolean     @default(true)
+  createdAt                 DateTime    @default(now())
+  tenant                    Tenant      @relation(fields: [tenantId], references: [id])
+  priceRules                PriceRule[]
+  quoteLines                QuoteLine[]
+  orderLines                OrderLine[]
+
+  @@unique([tenantId, sku])
+}
+
+model PriceRule {
+  id                              String   @id @default(cuid())
+  tenantId                        String
+  productId                       String
+  minQuantity                     Int
+  maxQuantity                     Int
+  floorPriceCents                 Int
+  financeApprovalDiscountPct      Int
+  legalApprovalForNonStandardTerm Boolean  @default(true)
+  allowedTermMonths               Json
+  createdAt                       DateTime @default(now())
+  tenant                          Tenant   @relation(fields: [tenantId], references: [id])
+  product                         Product  @relation(fields: [productId], references: [id])
+}
+
+model Opportunity {
+  id               String           @id @default(cuid())
+  tenantId         String
+  customerAccountId String
+  ownerUserId      String
+  name             String
+  stage            OpportunityStage
+  currency         String
+  targetAmountCents Int
+  expectedCloseDate DateTime
+  notes            String?
+  createdAt        DateTime         @default(now())
+  tenant           Tenant           @relation(fields: [tenantId], references: [id])
+  customerAccount  CustomerAccount  @relation(fields: [customerAccountId], references: [id])
+  quotes           Quote[]
+
+  @@index([tenantId, stage])
+  @@unique([id, tenantId])
+}
+
+model Quote {
+  id                 String          @id @default(cuid())
+  tenantId           String
+  opportunityId      String?
+  customerAccountId  String
+  createdByUserId    String
+  amendmentOfOrderId String?
+  amendmentType      AmendmentType?
+  status             QuoteStatus
+  currency           String
+  contractTermMonths Int
+  startsAt           DateTime
+  subtotalCents      Int
+  discountCents      Int
+  totalCents         Int
+  exceptionReason    String?
+  createdAt          DateTime        @default(now())
+  // ⚠️ SENIOR NOTE: Quote stores commercial totals as a snapshot so downstream billing does not reprice from mutable catalog records later.
+  tenant             Tenant          @relation(fields: [tenantId], references: [id])
+  opportunity        Opportunity?    @relation(fields: [opportunityId], references: [id])
+  customerAccount    CustomerAccount @relation(fields: [customerAccountId], references: [id])
+  lines              QuoteLine[]
+  approvals          QuoteApproval[]
+  dealDeskCase       DealDeskCase?
+  salesOrder         SalesOrder?
+
+  @@unique([id, tenantId])
+}
+
+model QuoteLine {
+  id              String   @id @default(cuid())
+  quoteId         String
+  productId       String
+  pricingRuleId   String?
+  quantity        Int
+  listPriceCents  Int
+  unitPriceCents  Int
+  discountPct     Int
+  createdAt       DateTime @default(now())
+  quote           Quote    @relation(fields: [quoteId], references: [id])
+  product         Product  @relation(fields: [productId], references: [id])
+  pricingRule     PriceRule? @relation(fields: [pricingRuleId], references: [id])
+}
+
+model QuoteApproval {
+  id              String         @id @default(cuid())
+  tenantId        String
+  quoteId         String
+  approverRole    UserRole
+  approvalType    ApprovalType
+  status          ApprovalStatus
+  requestedAt     DateTime       @default(now())
+  // ⚠️ SENIOR NOTE: Approval rows are durable records, not just current status flags, so audit and escalation workflows can reason about who approved what.
+  decidedAt       DateTime?
+  note            String?
+  tenant          Tenant         @relation(fields: [tenantId], references: [id])
+  quote           Quote          @relation(fields: [quoteId], references: [id])
+}
+
+model DealDeskCase {
+  id               String             @id @default(cuid())
+  tenantId         String
+  quoteId          String             @unique
+  status           DealDeskCaseStatus
+  reason           String
+  assignedRole     UserRole
+  resolutionNote   String?
+  createdAt        DateTime           @default(now())
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  quote            Quote              @relation(fields: [quoteId], references: [id])
+
+  @@unique([quoteId, tenantId])
+}
+
+model SalesOrder {
+  id                String          @id @default(cuid())
+  tenantId          String
+  quoteId           String          @unique
+  customerAccountId String
+  status            OrderStatus
+  effectiveAt       DateTime
+  billingStartDate  DateTime
+  contractTermMonths Int
+  totalCents        Int
+  createdAt         DateTime        @default(now())
+  tenant            Tenant          @relation(fields: [tenantId], references: [id])
+  quote             Quote           @relation(fields: [quoteId], references: [id])
+  customerAccount   CustomerAccount @relation(fields: [customerAccountId], references: [id])
+  lines             OrderLine[]
+  invoices          Invoice[]
+  provisioningRequest ProvisioningRequest?
+  revenueEvents     RevenueEvent[]
+
+  @@unique([id, tenantId])
+}
+
+model OrderLine {
+  id              String     @id @default(cuid())
+  orderId         String
+  productId       String
+  quantity        Int
+  unitPriceCents  Int
+  serviceStartAt  DateTime
+  salesOrder      SalesOrder @relation(fields: [orderId], references: [id])
+  product         Product    @relation(fields: [productId], references: [id])
+}
+
+model ProvisioningRequest {
+  id               String             @id @default(cuid())
+  tenantId         String
+  orderId          String             @unique
+  status           ProvisioningStatus
+  externalReference String?
+  payload          Json
+  createdAt        DateTime           @default(now())
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  salesOrder       SalesOrder         @relation(fields: [orderId], references: [id])
+}
+
+model Invoice {
+  id               String        @id @default(cuid())
+  tenantId         String
+  orderId          String
+  status           InvoiceStatus
+  issueDate        DateTime
+  dueDate          DateTime
+  // ⚠️ SENIOR NOTE: Keeping totalCents and balanceCents separate prevents payment application from having to infer historical invoice state from child payment rows.
+  totalCents       Int
+  balanceCents     Int
+  createdAt        DateTime      @default(now())
+  tenant           Tenant        @relation(fields: [tenantId], references: [id])
+  salesOrder       SalesOrder    @relation(fields: [orderId], references: [id])
+  payments         Payment[]
+  revenueEvents    RevenueEvent[]
+
+  @@index([tenantId, status])
+  @@unique([id, tenantId])
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  tenantId      String
+  invoiceId     String
+  amountCents   Int
+  method        PaymentMethod
+  reference     String
+  appliedAt     DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id])
+  revenueEvents RevenueEvent[]
+}
+
+model RevenueEvent {
+  id              String             @id @default(cuid())
+  tenantId        String
+  orderId         String
+  invoiceId       String?
+  sourcePaymentId String?
+  eventType       RevenueEventType
+  status          RevenueEventStatus
+  amountCents     Int
+  recognizedAt    DateTime?
+  createdAt       DateTime           @default(now())
+  tenant          Tenant             @relation(fields: [tenantId], references: [id])
+  salesOrder      SalesOrder         @relation(fields: [orderId], references: [id])
+  invoice         Invoice?           @relation(fields: [invoiceId], references: [id])
+  sourcePayment   Payment?           @relation(fields: [sourcePaymentId], references: [id])
+}
+
+model WorkflowJob {
+  id         String            @id @default(cuid())
+  tenantId   String
+  jobType    WorkflowJobType
+  status     WorkflowJobStatus
+  payload    Json
+  runAt      DateTime
+  attempts   Int               @default(0)
+  createdAt  DateTime          @default(now())
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String
+  action      String
+  entityType  String
+  entityId    String
+  metadata    Json
+  createdAt   DateTime @default(now())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, entityType, entityId])
+}
