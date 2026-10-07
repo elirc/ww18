@@ -42,3 +42,15 @@ Request: Rejection path for unauthorized payment application
 4. `src/lib/auth/permissions.ts` — `assertCan()` rejects a role like `SALES` for `"invoice:applyPayment"`.
 5. `src/lib/errors.ts` — `getErrorResponse()` converts the `AppError` into an HTTP response.
 6. Returns `403` with `{ error: "Role SALES cannot perform invoice:applyPayment." }`
+
+## Concurrency notes for these flows
+
+These come from reading the source. None was exercised.
+
+- **`submitQuote`** checks `quote.status !== "DRAFT"` outside its transaction (`quote-service.ts:208-212`). Status writes go through `updateQuoteStatus`, so two concurrent submits can both pass the check and each create a deal-desk case or a set of approvals.
+- **`decideQuoteApproval`** re-reads the quote inside its transaction (line 402) to decide whether to finalize. When the last two approvers decide at the same time, each transaction can still see the other's approval as PENDING, because neither has committed. Both then return without finalizing (410-415), leaving the quote in `PENDING_APPROVAL` with no pending approvals.
+- **`updateApprovalDecision`** is itself conditional on `status: "PENDING"` (`src/repositories/quote-repository.ts:131-137`), but the service ignores the returned count.
+
+## Error envelope
+
+`withRouteContext` catches every error and calls `getErrorResponse` (`src/lib/errors.ts`). `AppError` carries its own `statusCode`: the policy and services use 404, 409, 422, 403, and 401. Read `getErrorResponse` to see how `ZodError` and unknown errors are mapped before relying on a particular status for those cases.
